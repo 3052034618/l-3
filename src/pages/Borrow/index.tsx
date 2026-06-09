@@ -17,7 +17,7 @@ const tabs = [
 ];
 
 export default function BorrowPage() {
-  const { activeTab, setActiveTab, getRecordsByType, getActiveBorrows, returnAsset, addBorrowRecord, transferAsset } = useBorrowStore();
+  const { activeTab, setActiveTab, getRecordsByType, getUnreturnedRecords, returnAsset, addBorrowRecord, transferAsset } = useBorrowStore();
   const { assets, getAssetById } = useAssetStore();
   const [showModal, setShowModal] = useState(false);
   const [returnModal, setReturnModal] = useState(false);
@@ -37,7 +37,9 @@ export default function BorrowPage() {
   let records = getRecordsByType(currentTab);
 
   if (currentTab === 'return') {
-    records = getActiveBorrows().filter((r) => r.type === 'receive' || r.type === 'borrow');
+    records = getUnreturnedRecords().filter(
+      (r) => r.type === 'receive' || r.type === 'borrow'
+    );
   }
 
   const filteredRecords = records.filter((r) => {
@@ -273,7 +275,7 @@ export default function BorrowPage() {
                     </td>
                   )}
                   <td className="px-6 py-4 text-right">
-                    {currentTab === 'return' && record.status === 'active' ? (
+                    {currentTab === 'return' && (record.status === 'active' || record.status === 'overdue') ? (
                       <Button size="sm" variant="secondary" onClick={() => handleReturn(record.id)}>
                         办理归还
                       </Button>

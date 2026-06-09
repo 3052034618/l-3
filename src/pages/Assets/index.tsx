@@ -17,7 +17,7 @@ import { Modal } from '@/components/Modal';
 import { Button } from '@/components/Button';
 import { AssetCategoryMap, AssetStatusMap, type AssetCategory, type AssetStatus } from '@/types';
 import { formatCurrency, formatDate, exportToCSV } from '@/utils';
-import { locations } from '@/data/mockData';
+import { locations, mockEmployees } from '@/data/mockData';
 import AssetForm from './components/AssetForm';
 import AssetDetail from './components/AssetDetail';
 import QRCodeModal from './components/QRCodeModal';
@@ -158,6 +158,22 @@ export default function AssetsPage() {
             {locations.map((loc) => (
               <option key={loc} value={loc}>
                 {loc}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={filters.responsiblePerson || ''}
+            onChange={(e) => {
+              setFilters({ responsiblePerson: e.target.value || undefined });
+              setCurrentPage(1);
+            }}
+            className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">全部责任人</option>
+            {mockEmployees.map((emp) => (
+              <option key={emp.id} value={emp.name}>
+                {emp.name}
               </option>
             ))}
           </select>

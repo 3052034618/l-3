@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import {
   ClipboardList,
   Plus,
@@ -10,41 +11,44 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
+  X,
 } from 'lucide-react';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { StatusTag } from '@/components/StatusTag';
 import { Modal } from '@/components/Modal';
 import { Button } from '@/components/Button';
 import {
-  InventoryStatusMap,
   InventoryItemStatusMap,
-  type InventoryStatus,
   type InventoryItemStatus,
 } from '@/types';
 import { departments } from '@/data/mockData';
 import { formatDate } from '@/utils';
 
+interface ImportItem {
+  code: string;
+  name: string;
+}
+
 export default function InventoryPage() {
   const {
     tasks,
-    items,
     activeTaskId,
     setActiveTaskId,
     getTaskItems,
-    getTaskItemsByStatus,
     createTask,
     startTask,
     completeTask,
     updateItemStatus,
-    batchUpdateItems,
     importInventory,
   } = useInventoryStore();
 
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showDetail, setShowDetail] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [itemFilter, setItemFilter] = useState<InventoryItemStatus | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [importPreview, setImportPreview] = useState<ImportItem[]>([]);
+  const [importFileName, setImportFileName] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [taskForm, setTaskForm] = useState({
     name: '',
@@ -69,6 +73,17 @@ export default function InventoryPage() {
     return true;
   });
 
+  const getTaskProgress = (taskId: string) => {
+    const items = getTaskItems(taskId);
+    if (items.length === 0) return { count: 0, total: 0, percent: 0 };
+    const checked = items.filter((i) => i.status !== 'unchecked').length;
+    return {
+      count: checked,
+      total: items.length,
+      percent: Math.round((checked / items.length) * 100),
+    };
+  };
+
   const handleCreateTask = (e: React.FormEvent) => {
     e.preventDefault();
     createTask(taskForm);
@@ -84,8 +99,6 @@ export default function InventoryPage() {
   const handleStartTask = (taskId: string) => {
     if (confirm('确认开始盘点？系统将自动生成盘点清单。')) {
       startTask(taskId);
-      setActiveTaskId(taskId);
-      setShowDetail(true);
     }
   };
 
@@ -95,25 +108,119 @@ export default function InventoryPage() {
     }
   };
 
-  const handleImport = () => {
-    const mockImportData = [
-      { code: 'AST-IMPORT-001', name: '新增资产1' },
-      { code: 'AST-IMPORT-002', name: '新增资产2' },
-    ];
+  const parseFile = (file: File) => {
+    const reader = new FileReader();
+    const fileName = file.name.toLowerCase();
+
+    reader.onload = (e) => {
+      try {
+        let data: ImportItem[] = [];
+
+        if (fileName.endsWith('.csv')) {
+          const text = e.target?.result as string;
+          const lines = text.split('\n').filter((line) => line.trim());
+          
+          const headers = lines[0].split(',').map((h) => h.trim().toLowerCase());
+          const codeIdx = headers.findIndex((h) => h.includes('编号') || h.includes('code') || h.includes('资产编码'));
+          const nameIdx = headers.findIndex((h) => h.includes('名称') || h.includes('name') || h.includes('资产名称'));
+
+          const startIdx = Math.max(codeIdx, nameIdx) >= 0 ? 1 : 0;
+          const actualCodeIdx = codeIdx >= 0 ? codeIdx : 0;
+          const actualNameIdx = nameIdx >= 0 ? nameIdx : 1;
+
+          for (let i = startIdx; i < lines.length; i++) {
+            const cols = lines[i].split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
+            if (cols[actualCodeIdx] || cols[actualNameIdx]) {
+              data.push({
+                code: cols[actualCodeIdx] || '',
+                name: cols[actualNameIdx] || '',
+              });
+            }
+          }
+        } else if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+          const workbook = XLSX.read(e.target?.result, { type: 'binary' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 }) as string[][];
+
+          if (jsonData.length > 0) {
+            const headers = jsonData[0].map((h) => String(h || '').toLowerCase());
+            const codeIdx = headers.findIndex((h) => h.includes('编号') || h.includes('code') || h.includes('资产编码'));
+            const nameIdx = headers.findIndex((h) => h.includes('名称') || h.includes('name') || h.includes('资产名称'));
+
+            const startIdx = Math.max(codeIdx, nameIdx) >= 0 ? 1 : 0;
+            const actualCodeIdx = codeIdx >= 0 ? codeIdx : 0;
+            const actualNameIdx = nameIdx >= 0 ? nameIdx : 1;
+
+            for (let i = startIdx; i < jsonData.length; i++) {
+              const row = jsonData[i];
+              if (row && (row[actualCodeIdx] || row[actualNameIdx])) {
+                data.push({
+                  code: String(row[actualCodeIdx] || ''),
+                  name: String(row[actualNameIdx] || ''),
+                });
+              }
+            }
+          }
+        }
+
+        setImportPreview(data);
+        setImportFileName(file.name);
+      } catch (err) {
+        console.error('解析文件失败:', err);
+        alert('文件解析失败，请检查文件格式');
+      }
+    };
+
+    if (fileName.endsWith('.csv')) {
+      reader.readAsText(file, 'UTF-8');
+    } else {
+      reader.readAsBinaryString(file);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      parseFile(file);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      const name = file.name.toLowerCase();
+      if (name.endsWith('.csv') || name.endsWith('.xlsx') || name.endsWith('.xls')) {
+        parseFile(file);
+      } else {
+        alert('请上传 CSV 或 Excel 文件');
+      }
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleConfirmImport = () => {
+    if (importPreview.length === 0) {
+      alert('没有可导入的数据');
+      return;
+    }
     if (activeTaskId) {
-      importInventory(activeTaskId, mockImportData);
+      importInventory(activeTaskId, importPreview);
       setShowImport(false);
-      alert('导入成功！');
+      setImportPreview([]);
+      setImportFileName('');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
   const getStatusCount = (status: InventoryItemStatus) => {
     return taskItems.filter((i) => i.status === status).length;
   };
-
-  const progress = activeTask && activeTask.totalCount > 0
-    ? Math.round((activeTask.checkedCount / activeTask.totalCount) * 100)
-    : 0;
 
   return (
     <div className="space-y-6">
@@ -136,44 +243,46 @@ export default function InventoryPage() {
             <h3 className="font-medium text-slate-900">盘点任务</h3>
           </div>
           <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
-            {tasks.map((task) => (
-              <div
-                key={task.id}
-                onClick={() => {
-                  setActiveTaskId(task.id);
-                  setShowDetail(true);
-                }}
-                className={`p-4 cursor-pointer transition-colors ${
-                  activeTaskId === task.id
-                    ? 'bg-blue-50 border-l-4 border-blue-500'
-                    : 'hover:bg-slate-50'
-                }`}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-medium text-slate-900 truncate">{task.name}</h4>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {task.createDate} · {task.range}
-                    </p>
+            {tasks.map((task) => {
+              const progress = getTaskProgress(task.id);
+              return (
+                <div
+                  key={task.id}
+                  onClick={() => setActiveTaskId(task.id)}
+                  className={`p-4 cursor-pointer transition-colors ${
+                    activeTaskId === task.id
+                      ? 'bg-blue-50 border-l-4 border-blue-500'
+                      : 'hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-medium text-slate-900 truncate">{task.name}</h4>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {task.createDate} · {task.range}
+                      </p>
+                    </div>
+                    <StatusTag status={task.status} type="inventory" size="sm" />
                   </div>
-                  <StatusTag status={task.status} type="inventory" size="sm" />
+                  {task.status !== 'pending' && (
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+                        <span>
+                          进度 {progress.count}/{progress.total}
+                        </span>
+                        <span>{progress.percent}%</span>
+                      </div>
+                      <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-blue-500 rounded-full transition-all"
+                          style={{ width: `${progress.percent}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
-                {task.status !== 'pending' && (
-                  <div className="mt-3">
-                    <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-                      <span>进度 {task.checkedCount}/{task.totalCount}</span>
-                      <span>{progress}%</span>
-                    </div>
-                    <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-blue-500 rounded-full transition-all"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
 
             {tasks.length === 0 && (
               <div className="text-center py-12 text-slate-400 text-sm">
@@ -216,7 +325,7 @@ export default function InventoryPage() {
                 {/* 统计卡片 */}
                 <div className="grid grid-cols-4 gap-4 mt-4">
                   <div className="bg-white rounded-lg p-3 border border-slate-200">
-                    <div className="text-2xl font-bold text-slate-900">{activeTask.totalCount}</div>
+                    <div className="text-2xl font-bold text-slate-900">{taskItems.length}</div>
                     <div className="text-xs text-slate-500 mt-1">资产总数</div>
                   </div>
                   <div className="bg-white rounded-lg p-3 border border-slate-200">
@@ -227,13 +336,13 @@ export default function InventoryPage() {
                   </div>
                   <div className="bg-white rounded-lg p-3 border border-slate-200">
                     <div className="text-2xl font-bold text-purple-600">
-                      {activeTask.surplusCount}
+                      {getStatusCount('surplus')}
                     </div>
                     <div className="text-xs text-slate-500 mt-1">盘盈</div>
                   </div>
                   <div className="bg-white rounded-lg p-3 border border-slate-200">
                     <div className="text-2xl font-bold text-red-600">
-                      {activeTask.deficitCount}
+                      {getStatusCount('deficit')}
                     </div>
                     <div className="text-xs text-slate-500 mt-1">盘亏</div>
                   </div>
@@ -435,7 +544,9 @@ export default function InventoryPage() {
             >
               <option value="全公司">全公司</option>
               {departments.map((dept) => (
-                <option key={dept} value={dept}>{dept}</option>
+                <option key={dept} value={dept}>
+                  {dept}
+                </option>
               ))}
             </select>
           </div>
@@ -464,30 +575,128 @@ export default function InventoryPage() {
       {/* 批量导入弹窗 */}
       <Modal
         isOpen={showImport}
-        onClose={() => setShowImport(false)}
+        onClose={() => {
+          setShowImport(false);
+          setImportPreview([]);
+          setImportFileName('');
+        }}
         title="批量导入盘点清单"
+        size="lg"
       >
         <div className="space-y-4">
-          <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-blue-400 transition-colors cursor-pointer">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-blue-400 hover:bg-blue-50/30 transition-all cursor-pointer"
+          >
             <FileUp className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-            <p className="text-sm font-medium text-slate-700">点击上传或拖拽文件到此处</p>
-            <p className="text-xs text-slate-500 mt-1">支持 Excel (.xlsx, .xls) 和 CSV 格式</p>
+            <p className="text-sm font-medium text-slate-700">
+              点击上传或拖拽文件到此处
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              支持 Excel (.xlsx, .xls) 和 CSV 格式
+            </p>
+            {importFileName && (
+              <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-sm">
+                {importFileName}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setImportPreview([]);
+                    setImportFileName('');
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
+
+          {importPreview.length > 0 && (
+            <div className="border border-slate-200 rounded-lg overflow-hidden">
+              <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <span className="text-sm font-medium text-slate-700">
+                  预览（共 {importPreview.length} 条）
+                </span>
+                <span className="text-xs text-slate-500">
+                  导入后将作为盘盈资产记录
+                </span>
+              </div>
+              <div className="max-h-48 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-slate-50">
+                    <tr>
+                      <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600 w-1/2">
+                        资产编号
+                      </th>
+                      <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600">
+                        资产名称
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {importPreview.slice(0, 20).map((item, idx) => (
+                      <tr key={idx}>
+                        <td className="px-4 py-2 font-mono text-slate-700">
+                          {item.code || '-'}
+                        </td>
+                        <td className="px-4 py-2 text-slate-700">
+                          {item.name || '-'}
+                        </td>
+                      </tr>
+                    ))}
+                    {importPreview.length > 20 && (
+                      <tr>
+                        <td
+                          colSpan={2}
+                          className="px-4 py-2 text-center text-slate-400 text-xs"
+                        >
+                          ...还有 {importPreview.length - 20} 条
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div className="bg-slate-50 rounded-lg p-3">
             <p className="text-xs text-slate-600 mb-2">导入说明：</p>
             <ul className="text-xs text-slate-500 space-y-1 list-disc list-inside">
-              <li>文件需包含资产编号、资产名称两列</li>
-              <li>导入的资产将作为盘盈资产记录</li>
+              <li>文件需包含「资产编号」和「资产名称」两列（支持中文/英文表头）</li>
+              <li>导入的资产将作为盘盈资产添加到当前盘点任务</li>
               <li>请确保数据格式正确后再导入</li>
             </ul>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
-            <Button variant="secondary" onClick={() => setShowImport(false)}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowImport(false);
+                setImportPreview([]);
+                setImportFileName('');
+              }}
+            >
               取消
             </Button>
-            <Button onClick={handleImport}>模拟导入</Button>
+            <Button
+              onClick={handleConfirmImport}
+              disabled={importPreview.length === 0}
+            >
+              确认导入 ({importPreview.length}条)
+            </Button>
           </div>
         </div>
       </Modal>

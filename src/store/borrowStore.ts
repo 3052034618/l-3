@@ -11,6 +11,7 @@ interface BorrowState {
   setActiveTab: (tab: 'receive' | 'return' | 'borrow' | 'transfer') => void;
   getRecordsByType: (type: BorrowType) => BorrowRecord[];
   getActiveBorrows: () => BorrowRecord[];
+  getUnreturnedRecords: () => BorrowRecord[];
   getOverdueRecords: () => BorrowRecord[];
   addBorrowRecord: (record: Omit<BorrowRecord, 'id' | 'status' | 'operator'>) => void;
   returnAsset: (recordId: string, remark?: string) => void;
@@ -30,6 +31,11 @@ export const useBorrowStore = create<BorrowState>()(
       },
       getActiveBorrows: () => {
         return get().records.filter((r) => r.status === 'active');
+      },
+      getUnreturnedRecords: () => {
+        return get().records.filter(
+          (r) => r.status === 'active' || r.status === 'overdue'
+        );
       },
       getOverdueRecords: () => {
         return get().records.filter(
