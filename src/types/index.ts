@@ -1,4 +1,4 @@
-export type AssetStatus = 'idle' | 'in_use' | 'borrowed' | 'maintenance' | 'scrapped';
+export type AssetStatus = 'idle' | 'in_use' | 'borrowed' | 'maintenance' | 'scrapped' | 'pending_disposal' | 'pending_register';
 export type AssetCategory = 'office_equipment' | 'tooling' | 'low_value_consumables';
 export type BorrowType = 'receive' | 'borrow' | 'transfer' | 'return';
 export type BorrowStatus = 'active' | 'returned' | 'overdue';
@@ -134,6 +134,8 @@ export const AssetStatusMap: Record<AssetStatus, string> = {
   borrowed: '已借出',
   maintenance: '维修中',
   scrapped: '已报废',
+  pending_disposal: '待处理',
+  pending_register: '待建档',
 };
 
 export const AssetCategoryMap: Record<AssetCategory, string> = {

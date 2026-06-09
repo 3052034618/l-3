@@ -13,8 +13,16 @@ import {
   TrendingDown,
   Minus,
   X,
+  ChevronDown,
+  ChevronUp,
+  FileText,
+  Target,
+  Clock,
+  User,
+  AlertTriangle,
 } from 'lucide-react';
 import { useInventoryStore } from '@/store/inventoryStore';
+import { useAssetStore } from '@/store/assetStore';
 import { StatusTag } from '@/components/StatusTag';
 import { Modal } from '@/components/Modal';
 import { Button } from '@/components/Button';
@@ -42,12 +50,20 @@ export default function InventoryPage() {
     updateItemStatus,
     importInventory,
   } = useInventoryStore();
+  const { handleInventoryDeficit, handleInventorySurplus, getAssetByCode } = useAssetStore();
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [itemFilter, setItemFilter] = useState<InventoryItemStatus | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState<'list' | 'summary'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'summary' | 'report'>('list');
+  const [summarySearch, setSummarySearch] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
+    normal: true,
+    surplus: true,
+    deficit: true,
+    unchecked: true,
+  });
   const [importPreview, setImportPreview] = useState<ImportItem[]>([]);
   const [importFileName, setImportFileName] = useState('');
   const [importStep, setImportStep] = useState<'upload' | 'confirm'>('upload');
@@ -296,6 +312,70 @@ export default function InventoryPage() {
     exportToCSV(data, `盘点结果_${activeTask.name}_${formatDate(new Date())}.csv`);
   };
 
+  const handleSyncDeficit = () => {
+    if (!activeTask) return;
+    const deficitItems = taskItems.filter((i) => i.status === 'deficit');
+    if (deficitItems.length === 0) {
+      alert('没有盘亏资产需要同步');
+      return;
+    }
+
+    if (!confirm(`确认将 ${deficitItems.length} 件盘亏资产转入待处理状态？`)) {
+      return;
+    }
+
+    let successCount = 0;
+    let skipCount = 0;
+
+    deficitItems.forEach((item) => {
+      const asset = getAssetByCode(item.assetCode);
+      if (asset && asset.status !== 'pending_disposal') {
+        handleInventoryDeficit(item.assetCode, activeTask.name);
+        successCount++;
+      } else {
+        skipCount++;
+      }
+    });
+
+    alert(`同步完成：成功 ${successCount} 件，跳过 ${skipCount} 件（已在待处理状态或不存在）`);
+  };
+
+  const handleSyncSurplus = () => {
+    if (!activeTask) return;
+    const surplusItems = taskItems.filter((i) => i.status === 'surplus');
+    if (surplusItems.length === 0) {
+      alert('没有盘盈资产需要同步');
+      return;
+    }
+
+    if (!confirm(`确认将 ${surplusItems.length} 件盘盈资产转为待建档记录？`)) {
+      return;
+    }
+
+    let successCount = 0;
+    let skipCount = 0;
+
+    surplusItems.forEach((item) => {
+      const existing = getAssetByCode(item.assetCode);
+      if (!existing) {
+        handleInventorySurplus(
+          {
+            code: item.assetCode,
+            name: item.assetName,
+            location: item.location,
+            responsiblePerson: item.responsiblePerson,
+          },
+          activeTask.name
+        );
+        successCount++;
+      } else {
+        skipCount++;
+      }
+    });
+
+    alert(`同步完成：成功 ${successCount} 件，跳过 ${skipCount} 件（资产编号已存在）`);
+  };
+
   return (
     <div className="space-y-6">
       {/* 页面标题 */}
@@ -447,6 +527,16 @@ export default function InventoryPage() {
                         }`}
                       >
                         差异汇总
+                      </button>
+                      <button
+                        onClick={() => setViewMode('report')}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                          viewMode === 'report'
+                            ? 'bg-white text-slate-900 shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        任务报告
                       </button>
                     </div>
 
@@ -600,179 +690,520 @@ export default function InventoryPage() {
                       </div>
                     )}
                   </div>
-                ) : (
-                  <div className="p-6 space-y-6 max-h-[400px] overflow-y-auto">
+                ) : viewMode === 'summary' ? (
+                  <div className="p-6 space-y-4 max-h-[400px] overflow-y-auto">
+                    {/* 搜索筛选 */}
+                    <div className="flex items-center gap-3">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <input
+                          type="text"
+                          value={summarySearch}
+                          onChange={(e) => setSummarySearch(e.target.value)}
+                          placeholder="按资产编号或责任人筛选..."
+                          className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={handleSyncSurplus}
+                        disabled={getStatusCount('surplus') === 0}
+                      >
+                        <TrendingUp className="w-3.5 h-3.5 mr-1.5" />
+                        盘盈转待建档
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={handleSyncDeficit}
+                        disabled={getStatusCount('deficit') === 0}
+                      >
+                        <TrendingDown className="w-3.5 h-3.5 mr-1.5" />
+                        盘亏转待处理
+                      </Button>
+                    </div>
+
                     {/* 账实相符 */}
                     <div className="border border-green-200 rounded-xl overflow-hidden">
-                      <div className="px-4 py-3 bg-green-50 border-b border-green-200 flex items-center justify-between">
+                      <button
+                        onClick={() =>
+                          setExpandedGroups({ ...expandedGroups, normal: !expandedGroups.normal })
+                        }
+                        className="w-full px-4 py-3 bg-green-50 border-b border-green-200 flex items-center justify-between hover:bg-green-100/50 transition-colors"
+                      >
                         <div className="flex items-center gap-2">
                           <div className="w-3 h-3 rounded-full bg-green-500" />
                           <span className="font-medium text-green-800">账实相符</span>
+                          <span className="text-sm text-green-700 font-medium">
+                            {getStatusCount('normal')} 件
+                          </span>
                         </div>
-                        <span className="text-sm text-green-700 font-medium">
-                          {getStatusCount('normal')} 件
-                        </span>
-                      </div>
-                      <div className="max-h-40 overflow-y-auto">
-                        {taskItems.filter((i) => i.status === 'normal').length > 0 ? (
-                          <div className="divide-y divide-green-100">
-                            {taskItems
-                              .filter((i) => i.status === 'normal')
-                              .slice(0, 10)
-                              .map((item) => (
-                                <div
-                                  key={item.id}
-                                  className="px-4 py-2.5 flex items-center justify-between hover:bg-green-50/50"
-                                >
-                                  <div>
-                                    <span className="font-mono text-sm text-slate-700">
-                                      {item.assetCode}
-                                    </span>
-                                    <span className="text-sm text-slate-900 ml-3">
-                                      {item.assetName}
+                        {expandedGroups.normal ? (
+                          <ChevronUp className="w-4 h-4 text-green-600" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4 text-green-600" />
+                        )}
+                      </button>
+                      {expandedGroups.normal && (
+                        <div className="max-h-60 overflow-y-auto">
+                          {taskItems
+                            .filter(
+                              (i) =>
+                                i.status === 'normal' &&
+                                (summarySearch
+                                  ? i.assetCode
+                                      .toLowerCase()
+                                      .includes(summarySearch.toLowerCase()) ||
+                                    i.responsiblePerson
+                                      ?.toLowerCase()
+                                      .includes(summarySearch.toLowerCase())
+                                  : true)
+                            )
+                            .length > 0 ? (
+                            <div className="divide-y divide-green-100">
+                              {taskItems
+                                .filter(
+                                  (i) =>
+                                    i.status === 'normal' &&
+                                    (summarySearch
+                                      ? i.assetCode
+                                          .toLowerCase()
+                                          .includes(summarySearch.toLowerCase()) ||
+                                        i.responsiblePerson
+                                          ?.toLowerCase()
+                                          .includes(summarySearch.toLowerCase())
+                                      : true)
+                                )
+                                .map((item) => (
+                                  <div
+                                    key={item.id}
+                                    className="px-4 py-2.5 flex items-center justify-between hover:bg-green-50/50"
+                                  >
+                                    <div>
+                                      <span className="font-mono text-sm text-slate-700">
+                                        {item.assetCode}
+                                      </span>
+                                      <span className="text-sm text-slate-900 ml-3">
+                                        {item.assetName}
+                                      </span>
+                                    </div>
+                                    <span className="text-xs text-slate-500">
+                                      {item.responsiblePerson || '-'}
                                     </span>
                                   </div>
-                                  <span className="text-xs text-slate-500">
-                                    {item.responsiblePerson || '-'}
-                                  </span>
-                                </div>
-                              ))}
-                          </div>
-                        ) : (
-                          <div className="px-4 py-6 text-center text-sm text-green-600/60">
-                            暂无账实相符资产
-                          </div>
-                        )}
-                      </div>
+                                ))}
+                            </div>
+                          ) : (
+                            <div className="px-4 py-6 text-center text-sm text-green-600/60">
+                              {summarySearch ? '没有匹配的资产' : '暂无账实相符资产'}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* 盘盈 */}
                     <div className="border border-purple-200 rounded-xl overflow-hidden">
-                      <div className="px-4 py-3 bg-purple-50 border-b border-purple-200 flex items-center justify-between">
+                      <button
+                        onClick={() =>
+                          setExpandedGroups({
+                            ...expandedGroups,
+                            surplus: !expandedGroups.surplus,
+                          })
+                        }
+                        className="w-full px-4 py-3 bg-purple-50 border-b border-purple-200 flex items-center justify-between hover:bg-purple-100/50 transition-colors"
+                      >
                         <div className="flex items-center gap-2">
                           <div className="w-3 h-3 rounded-full bg-purple-500" />
                           <span className="font-medium text-purple-800">盘盈资产</span>
+                          <span className="text-sm text-purple-700 font-medium">
+                            {getStatusCount('surplus')} 件
+                          </span>
                         </div>
-                        <span className="text-sm text-purple-700 font-medium">
-                          {getStatusCount('surplus')} 件
-                        </span>
-                      </div>
-                      <div className="max-h-40 overflow-y-auto">
-                        {taskItems.filter((i) => i.status === 'surplus').length > 0 ? (
-                          <div className="divide-y divide-purple-100">
-                            {taskItems
-                              .filter((i) => i.status === 'surplus')
-                              .slice(0, 10)
-                              .map((item) => (
-                                <div
-                                  key={item.id}
-                                  className="px-4 py-2.5 flex items-center justify-between hover:bg-purple-50/50"
-                                >
-                                  <div>
-                                    <span className="font-mono text-sm text-slate-700">
-                                      {item.assetCode}
-                                    </span>
-                                    <span className="text-sm text-slate-900 ml-3">
-                                      {item.assetName}
+                        {expandedGroups.surplus ? (
+                          <ChevronUp className="w-4 h-4 text-purple-600" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4 text-purple-600" />
+                        )}
+                      </button>
+                      {expandedGroups.surplus && (
+                        <div className="max-h-60 overflow-y-auto">
+                          {taskItems
+                            .filter(
+                              (i) =>
+                                i.status === 'surplus' &&
+                                (summarySearch
+                                  ? i.assetCode
+                                      .toLowerCase()
+                                      .includes(summarySearch.toLowerCase()) ||
+                                    i.responsiblePerson
+                                      ?.toLowerCase()
+                                      .includes(summarySearch.toLowerCase())
+                                  : true)
+                            )
+                            .length > 0 ? (
+                            <div className="divide-y divide-purple-100">
+                              {taskItems
+                                .filter(
+                                  (i) =>
+                                    i.status === 'surplus' &&
+                                    (summarySearch
+                                      ? i.assetCode
+                                          .toLowerCase()
+                                          .includes(summarySearch.toLowerCase()) ||
+                                        i.responsiblePerson
+                                          ?.toLowerCase()
+                                          .includes(summarySearch.toLowerCase())
+                                      : true)
+                                )
+                                .map((item) => (
+                                  <div
+                                    key={item.id}
+                                    className="px-4 py-2.5 flex items-center justify-between hover:bg-purple-50/50"
+                                  >
+                                    <div>
+                                      <span className="font-mono text-sm text-slate-700">
+                                        {item.assetCode}
+                                      </span>
+                                      <span className="text-sm text-slate-900 ml-3">
+                                        {item.assetName}
+                                      </span>
+                                    </div>
+                                    <span className="text-xs text-slate-500">
+                                      {item.location || '-'}
                                     </span>
                                   </div>
-                                  <span className="text-xs text-slate-500">
-                                    {item.location || '-'}
-                                  </span>
-                                </div>
-                              ))}
-                          </div>
-                        ) : (
-                          <div className="px-4 py-6 text-center text-sm text-purple-600/60">
-                            暂无盘盈资产
-                          </div>
-                        )}
-                      </div>
+                                ))}
+                            </div>
+                          ) : (
+                            <div className="px-4 py-6 text-center text-sm text-purple-600/60">
+                              {summarySearch ? '没有匹配的资产' : '暂无盘盈资产'}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* 盘亏 */}
                     <div className="border border-red-200 rounded-xl overflow-hidden">
-                      <div className="px-4 py-3 bg-red-50 border-b border-red-200 flex items-center justify-between">
+                      <button
+                        onClick={() =>
+                          setExpandedGroups({
+                            ...expandedGroups,
+                            deficit: !expandedGroups.deficit,
+                          })
+                        }
+                        className="w-full px-4 py-3 bg-red-50 border-b border-red-200 flex items-center justify-between hover:bg-red-100/50 transition-colors"
+                      >
                         <div className="flex items-center gap-2">
                           <div className="w-3 h-3 rounded-full bg-red-500" />
                           <span className="font-medium text-red-800">盘亏资产</span>
+                          <span className="text-sm text-red-700 font-medium">
+                            {getStatusCount('deficit')} 件
+                          </span>
                         </div>
-                        <span className="text-sm text-red-700 font-medium">
-                          {getStatusCount('deficit')} 件
-                        </span>
-                      </div>
-                      <div className="max-h-40 overflow-y-auto">
-                        {taskItems.filter((i) => i.status === 'deficit').length > 0 ? (
-                          <div className="divide-y divide-red-100">
-                            {taskItems
-                              .filter((i) => i.status === 'deficit')
-                              .slice(0, 10)
-                              .map((item) => (
-                                <div
-                                  key={item.id}
-                                  className="px-4 py-2.5 flex items-center justify-between hover:bg-red-50/50"
-                                >
-                                  <div>
-                                    <span className="font-mono text-sm text-slate-700">
-                                      {item.assetCode}
-                                    </span>
-                                    <span className="text-sm text-slate-900 ml-3">
-                                      {item.assetName}
+                        {expandedGroups.deficit ? (
+                          <ChevronUp className="w-4 h-4 text-red-600" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4 text-red-600" />
+                        )}
+                      </button>
+                      {expandedGroups.deficit && (
+                        <div className="max-h-60 overflow-y-auto">
+                          {taskItems
+                            .filter(
+                              (i) =>
+                                i.status === 'deficit' &&
+                                (summarySearch
+                                  ? i.assetCode
+                                      .toLowerCase()
+                                      .includes(summarySearch.toLowerCase()) ||
+                                    i.responsiblePerson
+                                      ?.toLowerCase()
+                                      .includes(summarySearch.toLowerCase())
+                                  : true)
+                            )
+                            .length > 0 ? (
+                            <div className="divide-y divide-red-100">
+                              {taskItems
+                                .filter(
+                                  (i) =>
+                                    i.status === 'deficit' &&
+                                    (summarySearch
+                                      ? i.assetCode
+                                          .toLowerCase()
+                                          .includes(summarySearch.toLowerCase()) ||
+                                        i.responsiblePerson
+                                          ?.toLowerCase()
+                                          .includes(summarySearch.toLowerCase())
+                                      : true)
+                                )
+                                .map((item) => (
+                                  <div
+                                    key={item.id}
+                                    className="px-4 py-2.5 flex items-center justify-between hover:bg-red-50/50"
+                                  >
+                                    <div>
+                                      <span className="font-mono text-sm text-slate-700">
+                                        {item.assetCode}
+                                      </span>
+                                      <span className="text-sm text-slate-900 ml-3">
+                                        {item.assetName}
+                                      </span>
+                                    </div>
+                                    <span className="text-xs text-slate-500">
+                                      {item.responsiblePerson || '-'}
                                     </span>
                                   </div>
-                                  <span className="text-xs text-slate-500">
-                                    {item.responsiblePerson || '-'}
-                                  </span>
-                                </div>
-                              ))}
-                          </div>
-                        ) : (
-                          <div className="px-4 py-6 text-center text-sm text-red-600/60">
-                            暂无盘亏资产
-                          </div>
-                        )}
-                      </div>
+                                ))}
+                            </div>
+                          ) : (
+                            <div className="px-4 py-6 text-center text-sm text-red-600/60">
+                              {summarySearch ? '没有匹配的资产' : '暂无盘亏资产'}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* 未盘点 */}
                     {getStatusCount('unchecked') > 0 && (
                       <div className="border border-slate-200 rounded-xl overflow-hidden">
-                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                        <button
+                          onClick={() =>
+                            setExpandedGroups({
+                              ...expandedGroups,
+                              unchecked: !expandedGroups.unchecked,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between hover:bg-slate-100 transition-colors"
+                        >
                           <div className="flex items-center gap-2">
                             <div className="w-3 h-3 rounded-full bg-slate-400" />
                             <span className="font-medium text-slate-700">未盘点</span>
+                            <span className="text-sm text-slate-600 font-medium">
+                              {getStatusCount('unchecked')} 件
+                            </span>
                           </div>
-                          <span className="text-sm text-slate-600 font-medium">
-                            {getStatusCount('unchecked')} 件
-                          </span>
-                        </div>
-                        <div className="max-h-32 overflow-y-auto">
-                          <div className="divide-y divide-slate-100">
-                            {taskItems
-                              .filter((i) => i.status === 'unchecked')
-                              .slice(0, 5)
-                              .map((item) => (
-                                <div
-                                  key={item.id}
-                                  className="px-4 py-2.5 flex items-center justify-between hover:bg-slate-50"
-                                >
-                                  <div>
-                                    <span className="font-mono text-sm text-slate-700">
-                                      {item.assetCode}
-                                    </span>
-                                    <span className="text-sm text-slate-900 ml-3">
-                                      {item.assetName}
+                          {expandedGroups.unchecked ? (
+                            <ChevronUp className="w-4 h-4 text-slate-600" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-slate-600" />
+                          )}
+                        </button>
+                        {expandedGroups.unchecked && (
+                          <div className="max-h-60 overflow-y-auto">
+                            <div className="divide-y divide-slate-100">
+                              {taskItems
+                                .filter(
+                                  (i) =>
+                                    i.status === 'unchecked' &&
+                                    (summarySearch
+                                      ? i.assetCode
+                                          .toLowerCase()
+                                          .includes(summarySearch.toLowerCase()) ||
+                                        i.responsiblePerson
+                                          ?.toLowerCase()
+                                          .includes(summarySearch.toLowerCase())
+                                      : true)
+                                )
+                                .map((item) => (
+                                  <div
+                                    key={item.id}
+                                    className="px-4 py-2.5 flex items-center justify-between hover:bg-slate-50"
+                                  >
+                                    <div>
+                                      <span className="font-mono text-sm text-slate-700">
+                                        {item.assetCode}
+                                      </span>
+                                      <span className="text-sm text-slate-900 ml-3">
+                                        {item.assetName}
+                                      </span>
+                                    </div>
+                                    <span className="text-xs text-slate-500">
+                                      {item.responsiblePerson || '-'}
                                     </span>
                                   </div>
-                                  <span className="text-xs text-slate-500">
-                                    {item.responsiblePerson || '-'}
-                                  </span>
-                                </div>
-                              ))}
+                                ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-6 max-h-[400px] overflow-y-auto">
+                    {/* 任务报告 */}
+                    <div className="space-y-6">
+                      {/* 任务基本信息 */}
+                      <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl p-6 text-white">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <h3 className="text-xl font-bold">{activeTask.name}</h3>
+                            <p className="text-blue-100 text-sm mt-1">
+                              盘点任务报告
+                            </p>
+                          </div>
+                          <FileText className="w-12 h-12 text-blue-200" />
+                        </div>
+                        <div className="grid grid-cols-3 gap-4 mt-6 pt-4 border-t border-blue-400/30">
+                          <div>
+                            <p className="text-blue-200 text-xs">盘点范围</p>
+                            <p className="font-medium mt-0.5">{activeTask.range}</p>
+                          </div>
+                          <div>
+                            <p className="text-blue-200 text-xs">创建人</p>
+                            <p className="font-medium mt-0.5">{activeTask.creator}</p>
+                          </div>
+                          <div>
+                            <p className="text-blue-200 text-xs">计划日期</p>
+                            <p className="font-medium mt-0.5">{activeTask.planDate}</p>
                           </div>
                         </div>
                       </div>
-                    )}
+
+                      {/* 关键指标 */}
+                      <div className="grid grid-cols-4 gap-4">
+                        <div className="bg-slate-50 rounded-xl p-4 text-center border border-slate-200">
+                          <Target className="w-6 h-6 text-slate-500 mx-auto mb-2" />
+                          <div className="text-2xl font-bold text-slate-900">
+                            {taskItems.length}
+                          </div>
+                          <div className="text-xs text-slate-500 mt-1">应盘点数</div>
+                        </div>
+                        <div className="bg-green-50 rounded-xl p-4 text-center border border-green-200">
+                          <CheckCircle className="w-6 h-6 text-green-500 mx-auto mb-2" />
+                          <div className="text-2xl font-bold text-green-600">
+                            {taskItems.length - getStatusCount('unchecked')}
+                          </div>
+                          <div className="text-xs text-green-600 mt-1">已盘点</div>
+                        </div>
+                        <div className="bg-blue-50 rounded-xl p-4 text-center border border-blue-200">
+                          <Clock className="w-6 h-6 text-blue-500 mx-auto mb-2" />
+                          <div className="text-2xl font-bold text-blue-600">
+                            {taskItems.length > 0
+                              ? Math.round(
+                                  ((taskItems.length - getStatusCount('unchecked')) /
+                                    taskItems.length) *
+                                    100
+                                )
+                              : 0}
+                            %
+                          </div>
+                          <div className="text-xs text-blue-600 mt-1">完成率</div>
+                        </div>
+                        <div className="bg-amber-50 rounded-xl p-4 text-center border border-amber-200">
+                          <AlertTriangle className="w-6 h-6 text-amber-500 mx-auto mb-2" />
+                          <div className="text-2xl font-bold text-amber-600">
+                            {getStatusCount('surplus') + getStatusCount('deficit')}
+                          </div>
+                          <div className="text-xs text-amber-600 mt-1">差异数</div>
+                        </div>
+                      </div>
+
+                      {/* 差异详情 */}
+                      <div className="border border-slate-200 rounded-xl overflow-hidden">
+                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                          <span className="font-medium text-slate-700">差异汇总</span>
+                          <Button size="sm" variant="secondary" onClick={handleExportInventory}>
+                            <Download className="w-3.5 h-3.5 mr-1.5" />
+                            导出明细
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-3 divide-x divide-slate-200">
+                          <div className="p-4 text-center">
+                            <div className="text-3xl font-bold text-green-600">
+                              {getStatusCount('normal')}
+                            </div>
+                            <div className="text-sm text-slate-500 mt-1">账实相符</div>
+                            <div className="text-xs text-slate-400 mt-0.5">
+                              {taskItems.length > 0
+                                ? Math.round(
+                                    (getStatusCount('normal') / taskItems.length) * 100
+                                  )
+                                : 0}
+                              %
+                            </div>
+                          </div>
+                          <div className="p-4 text-center">
+                            <div className="text-3xl font-bold text-purple-600">
+                              {getStatusCount('surplus')}
+                            </div>
+                            <div className="text-sm text-slate-500 mt-1">盘盈</div>
+                            <div className="text-xs text-purple-500 mt-0.5">
+                              需待建档
+                            </div>
+                          </div>
+                          <div className="p-4 text-center">
+                            <div className="text-3xl font-bold text-red-600">
+                              {getStatusCount('deficit')}
+                            </div>
+                            <div className="text-sm text-slate-500 mt-1">盘亏</div>
+                            <div className="text-xs text-red-500 mt-0.5">
+                              需待处理
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 未盘点明细 */}
+                      {getStatusCount('unchecked') > 0 && (
+                        <div className="border border-slate-200 rounded-xl overflow-hidden">
+                          <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
+                            <span className="font-medium text-slate-700">
+                              未盘点明细（{getStatusCount('unchecked')} 件）
+                            </span>
+                          </div>
+                          <div className="max-h-40 overflow-y-auto">
+                            <div className="divide-y divide-slate-100">
+                              {taskItems
+                                .filter((i) => i.status === 'unchecked')
+                                .slice(0, 10)
+                                .map((item) => (
+                                  <div
+                                    key={item.id}
+                                    className="px-4 py-2.5 flex items-center justify-between hover:bg-slate-50"
+                                  >
+                                    <div>
+                                      <span className="font-mono text-sm text-slate-700">
+                                        {item.assetCode}
+                                      </span>
+                                      <span className="text-sm text-slate-900 ml-3">
+                                        {item.assetName}
+                                      </span>
+                                    </div>
+                                    <span className="text-xs text-slate-500">
+                                      {item.responsiblePerson || '-'}
+                                    </span>
+                                  </div>
+                                ))}
+                              {getStatusCount('unchecked') > 10 && (
+                                <div className="px-4 py-2 text-center text-xs text-slate-400">
+                                  还有 {getStatusCount('unchecked') - 10} 件未盘点...
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 执行人信息 */}
+                      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 rounded-xl border border-slate-200">
+                        <div className="flex items-center gap-3">
+                          <User className="w-5 h-5 text-slate-500" />
+                          <div>
+                            <p className="text-sm font-medium text-slate-700">
+                              盘点负责人：{activeTask.creator}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              创建时间：{activeTask.createDate}
+                            </p>
+                          </div>
+                        </div>
+                        <StatusTag status={activeTask.status} type="inventory" />
+                      </div>
+                    </div>
                   </div>
                 )
               ) : (

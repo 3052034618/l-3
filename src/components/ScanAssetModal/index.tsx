@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { ScanLine, Search, Package, MapPin, User, Clock, Tag } from 'lucide-react';
+import { ScanLine, Search, Package, MapPin, User, Clock, Tag, ClipboardList } from 'lucide-react';
 import { useAssetStore } from '@/store/assetStore';
+import { useInventoryStore } from '@/store/inventoryStore';
 import { StatusTag } from '@/components/StatusTag';
 import { Button } from '@/components/Button';
-import { AssetStatusMap, AssetCategoryMap } from '@/types';
+import { AssetStatusMap, AssetCategoryMap, InventoryItemStatusMap } from '@/types';
 import { formatCurrency, formatDate } from '@/utils';
 
 interface ScanAssetModalProps {
@@ -13,6 +14,7 @@ interface ScanAssetModalProps {
 
 export default function ScanAssetModal({ isOpen, onClose }: ScanAssetModalProps) {
   const { assets, getAssetById, getAssetLogs } = useAssetStore();
+  const { getAssetInventoryHistory } = useInventoryStore();
   const [scanInput, setScanInput] = useState('');
   const [foundAsset, setFoundAsset] = useState<ReturnType<typeof getAssetById>>(undefined);
   const [notFound, setNotFound] = useState(false);
@@ -70,6 +72,8 @@ export default function ScanAssetModal({ isOpen, onClose }: ScanAssetModalProps)
   };
 
   const logs = foundAsset ? getAssetLogs(foundAsset.id).slice(0, 5) : [];
+  const inventoryHistory = foundAsset ? getAssetInventoryHistory(foundAsset.code) : [];
+  const lastInventory = inventoryHistory.length > 0 ? inventoryHistory[0] : null;
 
   return (
     <div className="space-y-6">
@@ -214,6 +218,38 @@ export default function ScanAssetModal({ isOpen, onClose }: ScanAssetModalProps)
               </p>
             </div>
           </div>
+
+          {lastInventory && (
+            <div className={`rounded-lg p-4 ${
+              lastInventory.status === 'normal' ? 'bg-green-50 border border-green-200' :
+              lastInventory.status === 'surplus' ? 'bg-purple-50 border border-purple-200' :
+              lastInventory.status === 'deficit' ? 'bg-red-50 border border-red-200' :
+              'bg-slate-50 border border-slate-200'
+            }`}>
+              <div className="flex items-center gap-2 mb-2">
+                <ClipboardList className={`w-4 h-4 ${
+                  lastInventory.status === 'normal' ? 'text-green-600' :
+                  lastInventory.status === 'surplus' ? 'text-purple-600' :
+                  lastInventory.status === 'deficit' ? 'text-red-600' :
+                  'text-slate-500'
+                }`} />
+                <span className={`text-sm font-medium ${
+                  lastInventory.status === 'normal' ? 'text-green-700' :
+                  lastInventory.status === 'surplus' ? 'text-purple-700' :
+                  lastInventory.status === 'deficit' ? 'text-red-700' :
+                  'text-slate-600'
+                }`}>
+                  最近一次盘点：{InventoryItemStatusMap[lastInventory.status]}
+                </span>
+              </div>
+              <div className="text-xs text-slate-600 space-y-1">
+                <p>盘点任务：{lastInventory.taskName}</p>
+                <p>盘点日期：{lastInventory.taskDate}</p>
+                {lastInventory.checkTime && <p>盘点时间：{lastInventory.checkTime}</p>}
+                {lastInventory.remark && <p>备注：{lastInventory.remark}</p>}
+              </div>
+            </div>
+          )}
 
           <div>
             <h4 className="text-sm font-medium text-slate-900 mb-3">最近操作记录</h4>

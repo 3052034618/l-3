@@ -1,8 +1,9 @@
 import { useAssetStore } from '@/store/assetStore';
+import { useInventoryStore } from '@/store/inventoryStore';
 import { StatusTag } from '@/components/StatusTag';
-import { AssetCategoryMap } from '@/types';
+import { AssetCategoryMap, InventoryItemStatusMap } from '@/types';
 import { formatCurrency, formatDate } from '@/utils';
-import { History, FileText, QrCode, Wrench, ArrowRight } from 'lucide-react';
+import { History, FileText, QrCode, Wrench, ArrowRight, ClipboardList } from 'lucide-react';
 
 interface AssetDetailProps {
   assetId: string;
@@ -10,8 +11,10 @@ interface AssetDetailProps {
 
 export default function AssetDetail({ assetId }: AssetDetailProps) {
   const { getAssetById, getAssetLogs } = useAssetStore();
+  const { getAssetInventoryHistory } = useInventoryStore();
   const asset = getAssetById(assetId);
   const logs = getAssetLogs(assetId);
+  const inventoryHistory = asset ? getAssetInventoryHistory(asset.code) : [];
 
   if (!asset) {
     return <div className="text-center py-8 text-slate-500">资产不存在</div>;
@@ -132,6 +135,62 @@ export default function AssetDetail({ assetId }: AssetDetailProps) {
           ) : (
             <div className="text-center py-6 text-slate-400 text-sm">
               暂无操作记录
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 盘点记录 */}
+      <div className="pt-4 border-t border-slate-200">
+        <div className="flex items-center gap-2 mb-4">
+          <ClipboardList className="w-4 h-4 text-slate-500" />
+          <h4 className="font-medium text-slate-900">盘点记录</h4>
+          <span className="text-xs text-slate-400">共 {inventoryHistory.length} 次</span>
+        </div>
+
+        <div className="relative">
+          {inventoryHistory.length > 0 ? (
+            <div className="space-y-3">
+              {inventoryHistory.map((item, index) => (
+                <div key={item.id} className="flex gap-3">
+                  <div className="flex flex-col items-center">
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
+                      item.status === 'normal' ? 'bg-green-100 text-green-600' :
+                      item.status === 'surplus' ? 'bg-purple-100 text-purple-600' :
+                      item.status === 'deficit' ? 'bg-red-100 text-red-600' :
+                      'bg-slate-100 text-slate-500'
+                    }`}>
+                      <ClipboardList className="w-3.5 h-3.5" />
+                    </div>
+                    {index < inventoryHistory.length - 1 && (
+                      <div className="w-px flex-1 bg-slate-200 my-1"></div>
+                    )}
+                  </div>
+                  <div className="flex-1 pb-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-slate-700">
+                        {item.taskName}
+                      </span>
+                      <StatusTag status={item.status} type="inventoryItem" size="sm" />
+                    </div>
+                    <div className="flex items-center gap-4 mt-1">
+                      <span className="text-xs text-slate-400">盘点日期：{item.taskDate}</span>
+                      {item.checkTime && (
+                        <span className="text-xs text-slate-400">盘点时间：{item.checkTime}</span>
+                      )}
+                    </div>
+                    {item.remark && (
+                      <div className="text-xs text-slate-500 mt-1 bg-slate-50 px-2 py-1 rounded">
+                        备注：{item.remark}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-6 text-slate-400 text-sm">
+              暂无盘点记录
             </div>
           )}
         </div>

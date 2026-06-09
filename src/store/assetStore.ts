@@ -8,7 +8,7 @@ import type {
   AssetStatus,
 } from '@/types';
 import { mockAssets, mockOperationLogs } from '@/data/mockData';
-import { generateId, generateAssetCode, calculateDepreciation, formatDateTime } from '@/utils';
+import { generateId, generateAssetCode, calculateDepreciation, formatDateTime, formatDate } from '@/utils';
 
 interface AssetState {
   assets: Asset[];
@@ -26,8 +26,11 @@ interface AssetState {
   updateAsset: (id: string, data: Partial<Asset>) => void;
   deleteAsset: (id: string) => void;
   getAssetById: (id: string) => Asset | undefined;
+  getAssetByCode: (code: string) => Asset | undefined;
   addOperationLog: (assetId: string, type: string, content: string, operator: string) => void;
   getAssetLogs: (assetId: string) => OperationLog[];
+  handleInventoryDeficit: (assetCode: string, taskName: string) => boolean;
+  handleInventorySurplus: (item: { code: string; name: string; location?: string; responsiblePerson?: string }, taskName: string) => Asset | null;
   getStatsOverview: () => StatsOverview;
   getAssetsByCategory: () => Record<string, { count: number; value: number }>;
   getAssetsByDepartment: () => Record<string, { count: number; value: number }>;
@@ -101,6 +104,56 @@ export const useAssetStore = create<AssetState>()(
       },
       getAssetById: (id) => {
         return get().assets.find((asset) => asset.id === id);
+      },
+      getAssetByCode: (code) => {
+        return get().assets.find((asset) => asset.code === code);
+      },
+      handleInventoryDeficit: (assetCode, taskName) => {
+        const asset = get().getAssetByCode(assetCode);
+        if (!asset) return false;
+        if (asset.status === 'pending_disposal') return false;
+
+        get().updateAsset(asset.id, { status: 'pending_disposal' });
+        get().addOperationLog(
+          asset.id,
+          'inventory',
+          `盘点盘亏，转入待处理（${taskName}）`,
+          '管理员'
+        );
+        return true;
+      },
+      handleInventorySurplus: (item, taskName) => {
+        const existing = get().getAssetByCode(item.code);
+        if (existing) return null;
+
+        const newAsset: Asset = {
+          id: generateId('A'),
+          code: item.code,
+          name: item.name,
+          category: 'office_equipment',
+          specification: '',
+          brand: '',
+          model: '',
+          purchasePrice: 0,
+          purchaseDate: formatDate(new Date()),
+          location: item.location || '',
+          responsiblePerson: item.responsiblePerson || '',
+          department: '',
+          status: 'pending_register',
+          warrantyExpire: '',
+          description: `盘点盘盈待建档（${taskName}）`,
+          depreciationYears: 5,
+          currentValue: 0,
+        };
+
+        set((state) => ({ assets: [newAsset, ...state.assets] }));
+        get().addOperationLog(
+          newAsset.id,
+          'inventory',
+          `盘点盘盈，待建档（${taskName}）`,
+          '管理员'
+        );
+        return newAsset;
       },
       addOperationLog: (assetId, type, content, operator) => {
         const log: OperationLog = {

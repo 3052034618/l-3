@@ -19,6 +19,7 @@ interface InventoryState {
   updateItemStatus: (itemId: string, status: InventoryItemStatus, remark?: string) => void;
   batchUpdateItems: (taskId: string, status: InventoryItemStatus) => void;
   importInventory: (taskId: string, assets: { code: string; name: string }[]) => void;
+  getAssetInventoryHistory: (assetIdOrCode: string) => Array<InventoryItem & { taskName: string; taskDate: string }>;
 }
 
 export const useInventoryStore = create<InventoryState>()(
@@ -187,6 +188,23 @@ export const useInventoryStore = create<InventoryState>()(
             t.id === taskId ? { ...t, totalCount: t.totalCount + newItems.length } : t
           ),
         }));
+      },
+      getAssetInventoryHistory: (assetIdOrCode) => {
+        const { items, tasks } = get();
+        const assetItems = items.filter(
+          (i) => i.assetId === assetIdOrCode || i.assetCode === assetIdOrCode
+        );
+        
+        return assetItems
+          .map((item) => {
+            const task = tasks.find((t) => t.id === item.taskId);
+            return {
+              ...item,
+              taskName: task?.name || '未知任务',
+              taskDate: task?.planDate || task?.createDate || '',
+            };
+          })
+          .sort((a, b) => new Date(b.taskDate).getTime() - new Date(a.taskDate).getTime());
       },
     }),
     {
