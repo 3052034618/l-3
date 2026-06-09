@@ -6,6 +6,7 @@ import {
   Play,
   CheckCircle,
   Upload,
+  Download,
   FileUp,
   Search,
   TrendingUp,
@@ -22,7 +23,7 @@ import {
   type InventoryItemStatus,
 } from '@/types';
 import { departments } from '@/data/mockData';
-import { formatDate } from '@/utils';
+import { formatDate, exportToCSV } from '@/utils';
 
 interface ImportItem {
   code: string;
@@ -46,8 +47,16 @@ export default function InventoryPage() {
   const [showImport, setShowImport] = useState(false);
   const [itemFilter, setItemFilter] = useState<InventoryItemStatus | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'list' | 'summary'>('list');
   const [importPreview, setImportPreview] = useState<ImportItem[]>([]);
   const [importFileName, setImportFileName] = useState('');
+  const [importStep, setImportStep] = useState<'upload' | 'confirm'>('upload');
+  const [importValidation, setImportValidation] = useState<{
+    valid: ImportItem[];
+    duplicateInFile: ImportItem[];
+    emptyCode: ImportItem[];
+    alreadyExists: ImportItem[];
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [taskForm, setTaskForm] = useState({
@@ -73,14 +82,22 @@ export default function InventoryPage() {
     return true;
   });
 
-  const getTaskProgress = (taskId: string) => {
-    const items = getTaskItems(taskId);
-    if (items.length === 0) return { count: 0, total: 0, percent: 0 };
-    const checked = items.filter((i) => i.status !== 'unchecked').length;
+  const getCardProgress = (task: typeof tasks[0]) => {
+    if (task.totalCount === 0) return { count: 0, total: 0, percent: 0 };
+    return {
+      count: task.checkedCount,
+      total: task.totalCount,
+      percent: Math.round((task.checkedCount / task.totalCount) * 100),
+    };
+  };
+
+  const getDetailProgress = () => {
+    if (taskItems.length === 0) return { count: 0, total: 0, percent: 0 };
+    const checked = taskItems.filter((i) => i.status !== 'unchecked').length;
     return {
       count: checked,
-      total: items.length,
-      percent: Math.round((checked / items.length) * 100),
+      total: taskItems.length,
+      percent: Math.round((checked / taskItems.length) * 100),
     };
   };
 
@@ -202,16 +219,54 @@ export default function InventoryPage() {
     e.preventDefault();
   };
 
+  const validateImport = () => {
+    if (!activeTaskId || importPreview.length === 0) return;
+
+    const currentItems = getTaskItems(activeTaskId);
+    const existingCodes = new Set(currentItems.map((i) => i.assetCode));
+
+    const valid: ImportItem[] = [];
+    const duplicateInFile: ImportItem[] = [];
+    const emptyCode: ImportItem[] = [];
+    const alreadyExists: ImportItem[] = [];
+    const seenCodes = new Set<string>();
+
+    importPreview.forEach((item) => {
+      if (!item.code.trim()) {
+        emptyCode.push(item);
+        return;
+      }
+
+      if (existingCodes.has(item.code)) {
+        alreadyExists.push(item);
+        return;
+      }
+
+      if (seenCodes.has(item.code)) {
+        duplicateInFile.push(item);
+        return;
+      }
+
+      seenCodes.add(item.code);
+      valid.push(item);
+    });
+
+    setImportValidation({ valid, duplicateInFile, emptyCode, alreadyExists });
+    setImportStep('confirm');
+  };
+
   const handleConfirmImport = () => {
-    if (importPreview.length === 0) {
-      alert('没有可导入的数据');
+    if (!importValidation || importValidation.valid.length === 0) {
+      alert('没有可导入的有效数据');
       return;
     }
     if (activeTaskId) {
-      importInventory(activeTaskId, importPreview);
+      importInventory(activeTaskId, importValidation.valid);
       setShowImport(false);
       setImportPreview([]);
       setImportFileName('');
+      setImportStep('upload');
+      setImportValidation(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -220,6 +275,25 @@ export default function InventoryPage() {
 
   const getStatusCount = (status: InventoryItemStatus) => {
     return taskItems.filter((i) => i.status === status).length;
+  };
+
+  const handleExportInventory = () => {
+    if (!activeTask || taskItems.length === 0) {
+      alert('没有可导出的盘点数据');
+      return;
+    }
+
+    const data = taskItems.map((item) => ({
+      资产编号: item.assetCode,
+      资产名称: item.assetName,
+      存放地点: item.location || '-',
+      责任人: item.responsiblePerson || '-',
+      盘点状态: InventoryItemStatusMap[item.status],
+      盘点时间: item.checkTime || '-',
+      备注: item.remark || '-',
+    }));
+
+    exportToCSV(data, `盘点结果_${activeTask.name}_${formatDate(new Date())}.csv`);
   };
 
   return (
@@ -244,7 +318,7 @@ export default function InventoryPage() {
           </div>
           <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
             {tasks.map((task) => {
-              const progress = getTaskProgress(task.id);
+              const progress = getCardProgress(task);
               return (
                 <div
                   key={task.id}
@@ -352,146 +426,355 @@ export default function InventoryPage() {
               {/* 筛选和操作 */}
               {activeTask.status !== 'pending' && (
                 <div className="px-6 py-3 border-b border-slate-200 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    {(['all', 'unchecked', 'normal', 'surplus', 'deficit'] as const).map((status) => (
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
                       <button
-                        key={status}
-                        onClick={() => setItemFilter(status)}
-                        className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
-                          itemFilter === status
-                            ? 'bg-blue-100 text-blue-700'
-                            : 'text-slate-600 hover:bg-slate-100'
+                        onClick={() => setViewMode('list')}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                          viewMode === 'list'
+                            ? 'bg-white text-slate-900 shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
-                        {status === 'all' ? '全部' : InventoryItemStatusMap[status]}
-                        {status !== 'all' && (
-                          <span className="ml-1 text-xs">
-                            ({getStatusCount(status)})
-                          </span>
-                        )}
+                        列表视图
                       </button>
-                    ))}
+                      <button
+                        onClick={() => setViewMode('summary')}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                          viewMode === 'summary'
+                            ? 'bg-white text-slate-900 shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        差异汇总
+                      </button>
+                    </div>
+
+                    {viewMode === 'list' && (
+                      <div className="flex items-center gap-2">
+                        {(['all', 'unchecked', 'normal', 'surplus', 'deficit'] as const).map((status) => (
+                          <button
+                            key={status}
+                            onClick={() => setItemFilter(status)}
+                            className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                              itemFilter === status
+                                ? 'bg-blue-100 text-blue-700'
+                                : 'text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            {status === 'all' ? '全部' : InventoryItemStatusMap[status]}
+                            {status !== 'all' && (
+                              <span className="ml-1 text-xs">
+                                ({getStatusCount(status)})
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="搜索资产..."
-                        className="w-48 pl-9 pr-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                    {activeTask.status === 'ongoing' && (
+                    {viewMode === 'list' && (
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <input
+                          type="text"
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          placeholder="搜索资产..."
+                          className="w-48 pl-9 pr-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    )}
+                    {activeTask.status === 'ongoing' && viewMode === 'list' && (
                       <Button size="sm" variant="secondary" onClick={() => setShowImport(true)}>
                         <Upload className="w-3.5 h-3.5 mr-1.5" />
                         批量导入
                       </Button>
                     )}
+                    <Button size="sm" variant="secondary" onClick={handleExportInventory}>
+                      <Download className="w-3.5 h-3.5 mr-1.5" />
+                      导出盘点表
+                    </Button>
                   </div>
                 </div>
               )}
 
               {/* 盘点清单 */}
               {activeTask.status !== 'pending' ? (
-                <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
-                  <table className="w-full">
-                    <thead className="sticky top-0 bg-slate-50">
-                      <tr className="border-b border-slate-200">
-                        <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
-                          资产编号
-                        </th>
-                        <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
-                          资产名称
-                        </th>
-                        <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
-                          存放地点
-                        </th>
-                        <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
-                          责任人
-                        </th>
-                        <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
-                          盘点状态
-                        </th>
-                        {activeTask.status === 'ongoing' && (
-                          <th className="text-right px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
-                            操作
+                viewMode === 'list' ? (
+                  <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                    <table className="w-full">
+                      <thead className="sticky top-0 bg-slate-50">
+                        <tr className="border-b border-slate-200">
+                          <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
+                            资产编号
                           </th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200">
-                      {filteredItems.map((item) => (
-                        <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-6 py-3">
-                            <span className="font-mono text-sm text-slate-700">
-                              {item.assetCode}
-                            </span>
-                          </td>
-                          <td className="px-6 py-3 font-medium text-slate-900">
-                            {item.assetName}
-                          </td>
-                          <td className="px-6 py-3 text-sm text-slate-600">
-                            {item.location || '-'}
-                          </td>
-                          <td className="px-6 py-3 text-sm text-slate-600">
-                            {item.responsiblePerson || '-'}
-                          </td>
-                          <td className="px-6 py-3">
-                            <StatusTag status={item.status} type="inventoryItem" size="sm" />
-                          </td>
+                          <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
+                            资产名称
+                          </th>
+                          <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
+                            存放地点
+                          </th>
+                          <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
+                            责任人
+                          </th>
+                          <th className="text-left px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
+                            盘点状态
+                          </th>
                           {activeTask.status === 'ongoing' && (
-                            <td className="px-6 py-3 text-right">
-                              <div className="flex items-center justify-end gap-1">
-                                <button
-                                  onClick={() => updateItemStatus(item.id, 'normal')}
-                                  className={`p-1.5 rounded transition-colors ${
-                                    item.status === 'normal'
-                                      ? 'bg-green-100 text-green-600'
-                                      : 'text-slate-400 hover:bg-green-50 hover:text-green-600'
-                                  }`}
-                                  title="正常"
-                                >
-                                  <Minus className="w-4 h-4" />
-                                </button>
-                                <button
-                                  onClick={() => updateItemStatus(item.id, 'surplus')}
-                                  className={`p-1.5 rounded transition-colors ${
-                                    item.status === 'surplus'
-                                      ? 'bg-purple-100 text-purple-600'
-                                      : 'text-slate-400 hover:bg-purple-50 hover:text-purple-600'
-                                  }`}
-                                  title="盘盈"
-                                >
-                                  <TrendingUp className="w-4 h-4" />
-                                </button>
-                                <button
-                                  onClick={() => updateItemStatus(item.id, 'deficit')}
-                                  className={`p-1.5 rounded transition-colors ${
-                                    item.status === 'deficit'
-                                      ? 'bg-red-100 text-red-600'
-                                      : 'text-slate-400 hover:bg-red-50 hover:text-red-600'
-                                  }`}
-                                  title="盘亏"
-                                >
-                                  <TrendingDown className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </td>
+                            <th className="text-right px-6 py-3 text-xs font-semibold text-slate-600 uppercase">
+                              操作
+                            </th>
                           )}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {filteredItems.map((item) => (
+                          <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="px-6 py-3">
+                              <span className="font-mono text-sm text-slate-700">
+                                {item.assetCode}
+                              </span>
+                            </td>
+                            <td className="px-6 py-3 font-medium text-slate-900">
+                              {item.assetName}
+                            </td>
+                            <td className="px-6 py-3 text-sm text-slate-600">
+                              {item.location || '-'}
+                            </td>
+                            <td className="px-6 py-3 text-sm text-slate-600">
+                              {item.responsiblePerson || '-'}
+                            </td>
+                            <td className="px-6 py-3">
+                              <StatusTag status={item.status} type="inventoryItem" size="sm" />
+                            </td>
+                            {activeTask.status === 'ongoing' && (
+                              <td className="px-6 py-3 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    onClick={() => updateItemStatus(item.id, 'normal')}
+                                    className={`p-1.5 rounded transition-colors ${
+                                      item.status === 'normal'
+                                        ? 'bg-green-100 text-green-600'
+                                        : 'text-slate-400 hover:bg-green-50 hover:text-green-600'
+                                    }`}
+                                    title="正常"
+                                  >
+                                    <Minus className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => updateItemStatus(item.id, 'surplus')}
+                                    className={`p-1.5 rounded transition-colors ${
+                                      item.status === 'surplus'
+                                        ? 'bg-purple-100 text-purple-600'
+                                        : 'text-slate-400 hover:bg-purple-50 hover:text-purple-600'
+                                    }`}
+                                    title="盘盈"
+                                  >
+                                    <TrendingUp className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => updateItemStatus(item.id, 'deficit')}
+                                    className={`p-1.5 rounded transition-colors ${
+                                      item.status === 'deficit'
+                                        ? 'bg-red-100 text-red-600'
+                                        : 'text-slate-400 hover:bg-red-50 hover:text-red-600'
+                                    }`}
+                                    title="盘亏"
+                                  >
+                                    <TrendingDown className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
 
-                  {filteredItems.length === 0 && (
-                    <div className="text-center py-12 text-slate-400">
-                      暂无盘点数据
+                    {filteredItems.length === 0 && (
+                      <div className="text-center py-12 text-slate-400">
+                        暂无盘点数据
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-6 space-y-6 max-h-[400px] overflow-y-auto">
+                    {/* 账实相符 */}
+                    <div className="border border-green-200 rounded-xl overflow-hidden">
+                      <div className="px-4 py-3 bg-green-50 border-b border-green-200 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full bg-green-500" />
+                          <span className="font-medium text-green-800">账实相符</span>
+                        </div>
+                        <span className="text-sm text-green-700 font-medium">
+                          {getStatusCount('normal')} 件
+                        </span>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto">
+                        {taskItems.filter((i) => i.status === 'normal').length > 0 ? (
+                          <div className="divide-y divide-green-100">
+                            {taskItems
+                              .filter((i) => i.status === 'normal')
+                              .slice(0, 10)
+                              .map((item) => (
+                                <div
+                                  key={item.id}
+                                  className="px-4 py-2.5 flex items-center justify-between hover:bg-green-50/50"
+                                >
+                                  <div>
+                                    <span className="font-mono text-sm text-slate-700">
+                                      {item.assetCode}
+                                    </span>
+                                    <span className="text-sm text-slate-900 ml-3">
+                                      {item.assetName}
+                                    </span>
+                                  </div>
+                                  <span className="text-xs text-slate-500">
+                                    {item.responsiblePerson || '-'}
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        ) : (
+                          <div className="px-4 py-6 text-center text-sm text-green-600/60">
+                            暂无账实相符资产
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  )}
-                </div>
+
+                    {/* 盘盈 */}
+                    <div className="border border-purple-200 rounded-xl overflow-hidden">
+                      <div className="px-4 py-3 bg-purple-50 border-b border-purple-200 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full bg-purple-500" />
+                          <span className="font-medium text-purple-800">盘盈资产</span>
+                        </div>
+                        <span className="text-sm text-purple-700 font-medium">
+                          {getStatusCount('surplus')} 件
+                        </span>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto">
+                        {taskItems.filter((i) => i.status === 'surplus').length > 0 ? (
+                          <div className="divide-y divide-purple-100">
+                            {taskItems
+                              .filter((i) => i.status === 'surplus')
+                              .slice(0, 10)
+                              .map((item) => (
+                                <div
+                                  key={item.id}
+                                  className="px-4 py-2.5 flex items-center justify-between hover:bg-purple-50/50"
+                                >
+                                  <div>
+                                    <span className="font-mono text-sm text-slate-700">
+                                      {item.assetCode}
+                                    </span>
+                                    <span className="text-sm text-slate-900 ml-3">
+                                      {item.assetName}
+                                    </span>
+                                  </div>
+                                  <span className="text-xs text-slate-500">
+                                    {item.location || '-'}
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        ) : (
+                          <div className="px-4 py-6 text-center text-sm text-purple-600/60">
+                            暂无盘盈资产
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 盘亏 */}
+                    <div className="border border-red-200 rounded-xl overflow-hidden">
+                      <div className="px-4 py-3 bg-red-50 border-b border-red-200 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full bg-red-500" />
+                          <span className="font-medium text-red-800">盘亏资产</span>
+                        </div>
+                        <span className="text-sm text-red-700 font-medium">
+                          {getStatusCount('deficit')} 件
+                        </span>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto">
+                        {taskItems.filter((i) => i.status === 'deficit').length > 0 ? (
+                          <div className="divide-y divide-red-100">
+                            {taskItems
+                              .filter((i) => i.status === 'deficit')
+                              .slice(0, 10)
+                              .map((item) => (
+                                <div
+                                  key={item.id}
+                                  className="px-4 py-2.5 flex items-center justify-between hover:bg-red-50/50"
+                                >
+                                  <div>
+                                    <span className="font-mono text-sm text-slate-700">
+                                      {item.assetCode}
+                                    </span>
+                                    <span className="text-sm text-slate-900 ml-3">
+                                      {item.assetName}
+                                    </span>
+                                  </div>
+                                  <span className="text-xs text-slate-500">
+                                    {item.responsiblePerson || '-'}
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        ) : (
+                          <div className="px-4 py-6 text-center text-sm text-red-600/60">
+                            暂无盘亏资产
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 未盘点 */}
+                    {getStatusCount('unchecked') > 0 && (
+                      <div className="border border-slate-200 rounded-xl overflow-hidden">
+                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-slate-400" />
+                            <span className="font-medium text-slate-700">未盘点</span>
+                          </div>
+                          <span className="text-sm text-slate-600 font-medium">
+                            {getStatusCount('unchecked')} 件
+                          </span>
+                        </div>
+                        <div className="max-h-32 overflow-y-auto">
+                          <div className="divide-y divide-slate-100">
+                            {taskItems
+                              .filter((i) => i.status === 'unchecked')
+                              .slice(0, 5)
+                              .map((item) => (
+                                <div
+                                  key={item.id}
+                                  className="px-4 py-2.5 flex items-center justify-between hover:bg-slate-50"
+                                >
+                                  <div>
+                                    <span className="font-mono text-sm text-slate-700">
+                                      {item.assetCode}
+                                    </span>
+                                    <span className="text-sm text-slate-900 ml-3">
+                                      {item.assetName}
+                                    </span>
+                                  </div>
+                                  <span className="text-xs text-slate-500">
+                                    {item.responsiblePerson || '-'}
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
               ) : (
                 <div className="flex flex-col items-center justify-center py-16">
                   <ClipboardList className="w-16 h-16 text-slate-300 mb-4" />
@@ -579,126 +862,277 @@ export default function InventoryPage() {
           setShowImport(false);
           setImportPreview([]);
           setImportFileName('');
+          setImportStep('upload');
+          setImportValidation(null);
         }}
-        title="批量导入盘点清单"
+        title={importStep === 'upload' ? '批量导入盘点清单' : '导入结果确认'}
         size="lg"
       >
-        <div className="space-y-4">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv,.xlsx,.xls"
-            onChange={handleFileSelect}
-            className="hidden"
-          />
+        {importStep === 'upload' ? (
+          <div className="space-y-4">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
 
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-blue-400 hover:bg-blue-50/30 transition-all cursor-pointer"
-          >
-            <FileUp className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-            <p className="text-sm font-medium text-slate-700">
-              点击上传或拖拽文件到此处
-            </p>
-            <p className="text-xs text-slate-500 mt-1">
-              支持 Excel (.xlsx, .xls) 和 CSV 格式
-            </p>
-            {importFileName && (
-              <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-sm">
-                {importFileName}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setImportPreview([]);
-                    setImportFileName('');
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                  }}
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-blue-400 hover:bg-blue-50/30 transition-all cursor-pointer"
+            >
+              <FileUp className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+              <p className="text-sm font-medium text-slate-700">
+                点击上传或拖拽文件到此处
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                支持 Excel (.xlsx, .xls) 和 CSV 格式
+              </p>
+              {importFileName && (
+                <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-sm">
+                  {importFileName}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setImportPreview([]);
+                      setImportFileName('');
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {importPreview.length > 0 && (
+              <div className="border border-slate-200 rounded-lg overflow-hidden">
+                <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                  <span className="text-sm font-medium text-slate-700">
+                    数据预览（共 {importPreview.length} 条）
+                  </span>
+                </div>
+                <div className="max-h-48 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-slate-50">
+                      <tr>
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600 w-1/2">
+                          资产编号
+                        </th>
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600">
+                          资产名称
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {importPreview.slice(0, 20).map((item, idx) => (
+                        <tr key={idx}>
+                          <td className="px-4 py-2 font-mono text-slate-700">
+                            {item.code || '-'}
+                          </td>
+                          <td className="px-4 py-2 text-slate-700">
+                            {item.name || '-'}
+                          </td>
+                        </tr>
+                      ))}
+                      {importPreview.length > 20 && (
+                        <tr>
+                          <td
+                            colSpan={2}
+                            className="px-4 py-2 text-center text-slate-400 text-xs"
+                          >
+                            ...还有 {importPreview.length - 20} 条
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
-          </div>
 
-          {importPreview.length > 0 && (
-            <div className="border border-slate-200 rounded-lg overflow-hidden">
-              <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <span className="text-sm font-medium text-slate-700">
-                  预览（共 {importPreview.length} 条）
-                </span>
-                <span className="text-xs text-slate-500">
-                  导入后将作为盘盈资产记录
-                </span>
+            <div className="bg-slate-50 rounded-lg p-3">
+              <p className="text-xs text-slate-600 mb-2">导入说明：</p>
+              <ul className="text-xs text-slate-500 space-y-1 list-disc list-inside">
+                <li>文件需包含「资产编号」和「资产名称」两列（支持中文/英文表头）</li>
+                <li>导入的资产将作为盘盈资产添加到当前盘点任务</li>
+                <li>系统将自动校验重复编号、空编号和已存在的资产</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowImport(false);
+                  setImportPreview([]);
+                  setImportFileName('');
+                }}
+              >
+                取消
+              </Button>
+              <Button
+                onClick={validateImport}
+                disabled={importPreview.length === 0}
+              >
+                下一步：校验数据
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* 校验结果摘要 */}
+            <div className="grid grid-cols-4 gap-3">
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-center">
+                <div className="text-2xl font-bold text-green-600">
+                  {importValidation?.valid.length || 0}
+                </div>
+                <div className="text-xs text-green-600 mt-1">可导入</div>
               </div>
-              <div className="max-h-48 overflow-y-auto">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-slate-50">
-                    <tr>
-                      <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600 w-1/2">
-                        资产编号
-                      </th>
-                      <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600">
-                        资产名称
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {importPreview.slice(0, 20).map((item, idx) => (
-                      <tr key={idx}>
-                        <td className="px-4 py-2 font-mono text-slate-700">
-                          {item.code || '-'}
-                        </td>
-                        <td className="px-4 py-2 text-slate-700">
-                          {item.name || '-'}
-                        </td>
-                      </tr>
-                    ))}
-                    {importPreview.length > 20 && (
-                      <tr>
-                        <td
-                          colSpan={2}
-                          className="px-4 py-2 text-center text-slate-400 text-xs"
-                        >
-                          ...还有 {importPreview.length - 20} 条
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center">
+                <div className="text-2xl font-bold text-amber-600">
+                  {importValidation?.duplicateInFile.length || 0}
+                </div>
+                <div className="text-xs text-amber-600 mt-1">文件内重复</div>
+              </div>
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-center">
+                <div className="text-2xl font-bold text-red-600">
+                  {importValidation?.emptyCode.length || 0}
+                </div>
+                <div className="text-xs text-red-600 mt-1">空编号</div>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-center">
+                <div className="text-2xl font-bold text-slate-600">
+                  {importValidation?.alreadyExists.length || 0}
+                </div>
+                <div className="text-xs text-slate-600 mt-1">已存在</div>
               </div>
             </div>
-          )}
 
-          <div className="bg-slate-50 rounded-lg p-3">
-            <p className="text-xs text-slate-600 mb-2">导入说明：</p>
-            <ul className="text-xs text-slate-500 space-y-1 list-disc list-inside">
-              <li>文件需包含「资产编号」和「资产名称」两列（支持中文/英文表头）</li>
-              <li>导入的资产将作为盘盈资产添加到当前盘点任务</li>
-              <li>请确保数据格式正确后再导入</li>
-            </ul>
-          </div>
+            {/* 可导入数据列表 */}
+            {importValidation && importValidation.valid.length > 0 && (
+              <div className="border border-green-200 rounded-lg overflow-hidden">
+                <div className="px-4 py-2 bg-green-50 border-b border-green-200 flex items-center justify-between">
+                  <span className="text-sm font-medium text-green-700">
+                    可导入数据（{importValidation.valid.length} 条）
+                  </span>
+                </div>
+                <div className="max-h-40 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-green-50/80">
+                      <tr>
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-green-700 w-1/2">
+                          资产编号
+                        </th>
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-green-700">
+                          资产名称
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-green-100">
+                      {importValidation.valid.slice(0, 10).map((item, idx) => (
+                        <tr key={idx}>
+                          <td className="px-4 py-2 font-mono text-green-700">
+                            {item.code}
+                          </td>
+                          <td className="px-4 py-2 text-green-700">{item.name}</td>
+                        </tr>
+                      ))}
+                      {importValidation.valid.length > 10 && (
+                        <tr>
+                          <td
+                            colSpan={2}
+                            className="px-4 py-2 text-center text-green-500 text-xs"
+                          >
+                            ...还有 {importValidation.valid.length - 10} 条
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setShowImport(false);
-                setImportPreview([]);
-                setImportFileName('');
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              onClick={handleConfirmImport}
-              disabled={importPreview.length === 0}
-            >
-              确认导入 ({importPreview.length}条)
-            </Button>
+            {/* 跳过的明细 */}
+            <div className="space-y-3 max-h-48 overflow-y-auto">
+              {importValidation && importValidation.duplicateInFile.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  <p className="text-sm font-medium text-amber-700 mb-1">
+                    文件内重复（跳过 {importValidation.duplicateInFile.length} 条）
+                  </p>
+                  <p className="text-xs text-amber-600">
+                    重复编号：
+                    {[...new Set(importValidation.duplicateInFile.map((i) => i.code))]
+                      .slice(0, 5)
+                      .join('、')}
+                    {importValidation.duplicateInFile.length > 5 && '...'}
+                  </p>
+                </div>
+              )}
+
+              {importValidation && importValidation.emptyCode.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <p className="text-sm font-medium text-red-700 mb-1">
+                    空编号（跳过 {importValidation.emptyCode.length} 条）
+                  </p>
+                  <p className="text-xs text-red-600">
+                    这些记录没有资产编号，无法导入
+                  </p>
+                </div>
+              )}
+
+              {importValidation && importValidation.alreadyExists.length > 0 && (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                  <p className="text-sm font-medium text-slate-700 mb-1">
+                    已存在于当前任务（跳过 {importValidation.alreadyExists.length} 条）
+                  </p>
+                  <p className="text-xs text-slate-600">
+                    已存在编号：
+                    {importValidation.alreadyExists
+                      .slice(0, 5)
+                      .map((i) => i.code)
+                      .join('、')}
+                    {importValidation.alreadyExists.length > 5 && '...'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-200">
+              <Button
+                variant="ghost"
+                onClick={() => setImportStep('upload')}
+                size="sm"
+              >
+                ← 返回上传
+              </Button>
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setShowImport(false);
+                    setImportPreview([]);
+                    setImportFileName('');
+                    setImportStep('upload');
+                    setImportValidation(null);
+                  }}
+                >
+                  取消
+                </Button>
+                <Button
+                  onClick={handleConfirmImport}
+                  disabled={!importValidation || importValidation.valid.length === 0}
+                >
+                  确认导入 ({importValidation?.valid.length || 0}条)
+                </Button>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </Modal>
     </div>
   );

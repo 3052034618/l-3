@@ -12,8 +12,11 @@ import {
   ChevronRight,
   Bell,
   Search,
+  ScanLine,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Modal } from '@/components/Modal';
+import ScanAssetModal from '@/components/ScanAssetModal';
 
 const menuItems = [
   { path: '/assets', label: '资产台账', icon: Package },
@@ -26,6 +29,7 @@ const menuItems = [
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showScanModal, setShowScanModal] = useState(false);
 
   return (
     <div className="flex h-screen bg-slate-100 overflow-hidden">
@@ -113,6 +117,13 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           </div>
 
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => setShowScanModal(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors text-sm font-medium"
+            >
+              <ScanLine className="w-4 h-4" />
+              扫码查询
+            </button>
             <button className="relative p-2 rounded-lg hover:bg-slate-100 transition-colors">
               <Bell className="w-5 h-5 text-slate-600" />
               <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
@@ -132,6 +143,16 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {children}
         </main>
       </div>
+
+      {/* 扫码查询弹窗 */}
+      <Modal
+        isOpen={showScanModal}
+        onClose={() => setShowScanModal(false)}
+        title="扫码查询"
+        size="md"
+      >
+        <ScanAssetModal isOpen={showScanModal} onClose={() => setShowScanModal(false)} />
+      </Modal>
     </div>
   );
 }
